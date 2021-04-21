@@ -111,7 +111,7 @@ void print_args(){
       delay(10);
       Serial.print(object["hour"].as<char*>());
       delay(10);
-      Serial.print("\n");
+      Serial.print(" ");
 
       delay(10);
       Serial.print("Minute");
@@ -119,18 +119,18 @@ void print_args(){
       delay(10);
       Serial.print(object["minute"].as<char*>());
       delay(10);
-      Serial.print("\n");  
+      Serial.print(" ");  
 
-      Serial.print("pillNames: [");
+      Serial.print("pillNames:[");
       for(int i=0; i<pillContainersCount-1; i++){
         delay(10);
         Serial.print(object["pillNames"][i].as<char*>());
         Serial.print(",");
       }
       Serial.print(object["pillNames"][7].as<char*>());
-      Serial.print("]\n");
+      Serial.print("] ");
 
-      Serial.print("pillQuantities: [");
+      Serial.print("pillQuantities:[");
       
       for(int i=0; i<pillContainersCount-1; i++){
         delay(10);
