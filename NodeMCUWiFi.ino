@@ -1,8 +1,11 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
 #include <ArduinoJson.h>
 #include <math.h>
+#include <string>
 #include <stdbool.h>
 
 #define baudRate 115200
@@ -18,6 +21,13 @@ bool WiFiNotSet = true;
 #define maxDigitCount 2
 #define maxPillName 15
 
+// This is a bit different from standard EEPROM class. You need to call EEPROM.begin(size) before you start reading or writing, size being the number of bytes you want to use. Size can be anywhere between 4 and 4096 bytes.
+//
+// EEPROM.write does not write to flash immediately, instead you must call EEPROM.commit() whenever you wish to save changes to flash. EEPROM.end() will also commit, and will release the RAM copy of EEPROM contents.
+//
+// EEPROM library uses one sector of flash located just after the embedded filesystem.
+
+//JSONArray();
 
 
 #define hourDigits 2
@@ -30,9 +40,6 @@ bool WiFiNotSet = true;
 
 #define debug true
 
-
-
-
 const size_t JSON_SIZE = JSON_OBJECT_SIZE(30);
 
 const int RX_pin = 13;
@@ -42,7 +49,7 @@ int param = 0;
 
 StaticJsonDocument<JSON_SIZE> doc;
 
-//void ICACHE_RAM_ATTR RX_ISR();
+DynamicJsonDocument Analyticsdoc(1024);
 
 JsonObject object;
 
@@ -51,17 +58,19 @@ String json;
 bool updatedFields = false;
 
 
-char ssid[SSID_SIZE];
-//ssid = "SweetPotatoJam";      //  your network SSID (name)
-char password[PASSWORD_SIZE];
-//= "jEVezYP92*BRPiyC8zxhceAF";   // your network password
+char ssid[SSID_SIZE] ="SweetPotatoJam";      //  your network SSID (name)
+
+char password[PASSWORD_SIZE] ="jEVezYP92*BRPiyC8zxhceAF";   // your network password
 
 const char* rest_host = "https://apd-webapp-backend.herokuapp.com/api/analytics";
 
 WiFiClient client;
 
-// char ssid[] = "ATT-HOMEBASE-5077";
-// char password[] = "04148468";
+ char temp_original_date[20];
+ char temp_taken_date[20];
+
+//"ATT-HOMEBASE-5077";
+// "04148468";
 
 
 struct alarm{ //hour, minute, pillQuantities
@@ -69,7 +78,7 @@ struct alarm{ //hour, minute, pillQuantities
     unsigned char hour;
     unsigned char minute;
     int pillQuantities[pillContainersCount];
-    char pillNames[pillContainersCount][maxPillName];
+    char pillNames[pillContainersCount][maxPillName]; //remove pillNames from alarm
 
 };
 
@@ -83,7 +92,6 @@ struct refill{ //pillNames and pillQuantities
 
 
 struct analytic{ //original_date, taken_date, completed, pill_names, pill_quanitites
-
     unsigned char hour; //original hour for alarm
     unsigned char minute; // original minute for alarm
     int pillQuantities[pillContainersCount];
@@ -95,8 +103,6 @@ struct analytic{ //original_date, taken_date, completed, pill_names, pill_quanit
     char dow;   // current day of week
     char TakenH; //hour when analytic was generated
     char TakenM; //minute when analytic was generated
-    
-
 };
 
 struct alarm schedule[pillContainersCount];
@@ -225,6 +231,25 @@ void WiFi_setup(){
   Serial.print("NODEMCU IP Address : ");
 
   Serial.print(WiFi.localIP());
+
+  if(debug)
+    Serial.println("setting up MDNS responder");
+  
+  while(!MDNS.begin("apdwifimodule")){
+
+  Serial.print(".");
+  delay(1000);
+    
+  }
+  if(debug)
+    Serial.println("\nMDNS has started");
+
+  server.begin();
+
+  if(debug)
+    Serial.println("\nHTTP Server has started");
+  
+  MDNS.addService("http", "tcp", 80);
 }
 
 int readnInt(int digitsToRead){
@@ -251,9 +276,9 @@ char* readnChar(char stringLength, char* list){
   
       for(int i=0; i<stringLength; i++){
 
-        if(debug) Serial.printf("readnChar function - character %c, i=%d", Serial.peek(), i);
+//        if(debug) Serial.printf("readnChar function - character %c, i=%d\n", Serial.peek(), i);
 
-        if(Serial.peek() == sep_character){
+        if(Serial.peek() == sep_character || Serial.peek() == '\0'){
          Serial.read();
          list[i] = '\0';
          i = stringLength + 1;
@@ -264,6 +289,11 @@ char* readnChar(char stringLength, char* list){
   
       if(debug){
         Serial.printf("readnChar function: list = %s\n", list);
+        
+        for(int i = 0; i<stringLength; i++){
+          Serial.printf("char at pos %d: %c\n", i, list[i]);
+        }
+        
         Serial.printf("readnChar function was finished\n");
       }
 
@@ -301,11 +331,10 @@ int* readnIntList(char digitCount, int* list, int listLength){
           
 }
 
-void RX_ISR(){
+void RX(){
   
-  if(debug) Serial.print("\nENTERED RX_ISR\n");
+  if(debug) Serial.print("\nENTERED RX\n");
   
-  //  RX ISR
   if(Serial.find("param:")){
     
     param = Serial.read() - '0';
@@ -313,7 +342,7 @@ void RX_ISR(){
   if(debug) Serial.printf("\nparam = %d\n", param);
   }
   
-  if(param == 1){
+  if(param == 1){ //Analytics
   //  Receive the parameters for pills, pillNames, day, year, month for the analytics through the UART port to the ESP8266
   //  If params are not null
   //    Send params using an HTTP_POST() to the remote server
@@ -422,7 +451,8 @@ void RX_ISR(){
     }
 
     Serial.find(sep_character);
-
+    
+    Analytics_to_JSON(); //adds the analytics generated to a json and posts the result to the Database
   }
   
   if(param == 2){
@@ -487,7 +517,7 @@ void RX_ISR(){
 
   param = 0;
     if(debug)
-    Serial.print("\nFINISHED RX_ISR\n");
+    Serial.print("\nFINISHED RX\n");
 }
 
 void setup() {
@@ -509,13 +539,6 @@ void setup() {
 
   if(debug)
     Serial.println();
-    
-  if(MDNS.begin("esp8266")){
-    
-    if(debug)
-      Serial.println("MDNS has started");
-      
-  }
 
   //setup Routes
   server.on("/", HTTP_GET, handleRoot);
@@ -523,17 +546,98 @@ void setup() {
 
   server.onNotFound(handleNotFound);
   
-  server.begin();
   //Serial.println("HTTP server started");
 
-//  attachInterrupt(digitalPinToInterrupt(RX_pin), RX_ISR, CHANGE);
+//  attachInterrupt(digitalPinToInterrupt(RX_pin), RX, CHANGE);
   Serial.print("Finished Basic Setup");
+}
+
+void post_DB(String json){
+
+  if(debug)
+    Serial.println("json is " + json + "\n");
+
+
+  while( WiFi.status() != WL_CONNECTED){ // while not Wireless Lan Connected
+    if(debug)
+      Serial.println("WiFi is not connected");
+        
+    delay(1000);
+  }
+
+  if(WiFi.status() == WL_CONNECTED){
+    WiFiClient client;
+
+    HTTPClient http;
+
+    if (http.begin(client, rest_host)) {  // HTTP
+      Serial.print("[HTTP] GET...");
+
+      int httpCode = http.POST(json);
+
+    
+    if (httpCode > 0) {
+        // HTTP header has been send and Server response header has been handled
+        if(debug)
+          Serial.printf("[HTTP] GET... code: %d", httpCode);
+
+          // file found at server
+  //        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+  //          
+  //        }
+      } 
+      else {
+          if(debug)
+            Serial.printf("[HTTP] GET... failed, error: %s", http.errorToString(httpCode).c_str());
+      }
+  
+        http.end();
+      }
+    }
+    
+    else {
+      if(debug)
+        Serial.printf("[HTTP} Unable to connect");
+    }
+}
+
+void Analytics_to_JSON(){
+
+//            'original_date': self.original_date,
+//            'taken_date': self.taken_date,
+//            'completed': self.completed,
+//            'pill_names': self.pill_names,
+//            'pill_quantities': self.pill_quantities
+
+//   char* temp_original_date;
+//   char* temp_taken_date;
+  
+  sprintf(temp_original_date, "%d-%d-%d %d:%d:00", analytics.year, analytics.month, analytics.day, analytics.hour, analytics.minute); //verify if errors
+    Analyticsdoc["original_date"] = temp_original_date;
+  
+  sprintf(temp_taken_date, "%d-%d-%d %d:%d:00", analytics.year, analytics.month, analytics.day, analytics.TakenH, analytics.TakenM); //verify if errors
+  Analyticsdoc["taken_date"] = temp_taken_date;
+  
+  Analyticsdoc["completed"] = analytics.taken;
+  
+  for(int i = 0; i<pillContainersCount; i++){
+    for(int j = 0; j<maxPillName; j++){
+      Analyticsdoc["pill_names"][i][j] = analytics.pillNames[i][j];
+    }
+  }
+
+  for(int i = 0; i<pillContainersCount; i++){
+      Analyticsdoc["pill_quantities"][i] = analytics.pillQuantities[i];
+  }
+
+serializeJson(Analyticsdoc, json);
+post_DB(json);
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
-  
-  server.handleClient();
+
+//  WiFiClient client = server.available();
 
   if(WiFiCredentialsReady() && WiFiNotSet){
     if(debug) Serial.print("\nWiFi ssid and password are set and not set up\n");
@@ -541,9 +645,14 @@ void loop() {
     if(debug) Serial.print("\nWiFi ssid and password are set and is set up\n");
     WiFiNotSet = false;
   }
+  if(!WiFiNotSet){
+    MDNS.update();
+  }
+
+  server.handleClient();
   
   if(Serial.available()){
-    RX_ISR();
+    RX();
   }
   
   if(updatedFields){
