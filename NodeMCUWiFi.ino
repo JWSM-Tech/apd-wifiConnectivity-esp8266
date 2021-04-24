@@ -21,14 +21,6 @@ bool WiFiNotSet = true;
 #define maxDigitCount 2
 #define maxPillName 15
 
-// This is a bit different from standard EEPROM class. You need to call EEPROM.begin(size) before you start reading or writing, size being the number of bytes you want to use. Size can be anywhere between 4 and 4096 bytes.
-//
-// EEPROM.write does not write to flash immediately, instead you must call EEPROM.commit() whenever you wish to save changes to flash. EEPROM.end() will also commit, and will release the RAM copy of EEPROM contents.
-//
-// EEPROM library uses one sector of flash located just after the embedded filesystem.
-
-//JSONArray();
-
 
 #define hourDigits 2
 #define minuteDigits 2
@@ -49,8 +41,6 @@ int param = 0;
 
 StaticJsonDocument<JSON_SIZE> doc;
 
-DynamicJsonDocument Analyticsdoc(1024);
-
 JsonObject object;
 
 String json;
@@ -62,9 +52,7 @@ char ssid[SSID_SIZE] ="SweetPotatoJam";      //  your network SSID (name)
 
 char password[PASSWORD_SIZE] ="jEVezYP92*BRPiyC8zxhceAF";   // your network password
 
-const char* rest_host = "https://apd-webapp-backend.herokuapp.com/api/analytics";
-
-WiFiClient client;
+const char* rest_host = "http://apd-webapp-backend.herokuapp.com/api/analytics";
 
  char temp_original_date[20];
  char temp_taken_date[20];
@@ -233,7 +221,7 @@ void WiFi_setup(){
   Serial.print(WiFi.localIP());
 
   if(debug)
-    Serial.println("setting up MDNS responder");
+    Serial.println("\nsetting up MDNS responder");
   
   while(!MDNS.begin("apdwifimodule")){
 
@@ -382,29 +370,25 @@ void RX(){
         }
       }
   
-      if(debug) Serial.printf("analytics.pillNames[%d] = %d\n", i, analytics.pillNames[i]);
+      if(debug) Serial.printf("analytics.pillNames[%d] = %s\n", i, analytics.pillNames[i]);
       
     }
 
     if(debug) Serial.print("END PILL NAMES \n");
-    Serial.find("]");
   }
 
   if(Serial.find("pillQuantities:[")){
     if(debug) Serial.print("pillQuantities are \n");
     readnIntList(maxDigitCount, analytics.pillQuantities, pillContainersCount);
     if(debug) Serial.println("END PILLQUANTITY");
-    Serial.find("]");
   }
 
 
 
   // Day
-
     if(Serial.find("Day:")){
       analytics.day = readnInt(dayDigits); // set analytics day
-      if(debug)
-            Serial.printf("Analytics day is %d\n", analytics.day);
+      if(debug) Serial.printf("Analytics day is %d\n", analytics.day);
     }
 
     //Month
@@ -475,7 +459,6 @@ void RX(){
 
     Serial.find("pillNames:[");
     
-  
       for(int i=0; i<pillContainersCount; i++){
         for(int j=0; j<maxPillName; j++){
   
@@ -530,6 +513,10 @@ void setup() {
 
   WiFi.mode(WIFI_STA); //WIFI_STA - Devices that connect to WiFi network are called stations (STA)
 
+
+  Serial.flush();
+  
+  
   if(WiFiCredentialsReady() && WiFiNotSet){
     if(debug) Serial.print("WiFi ssid and password are set and not set up\n");
     WiFi_setup();
@@ -566,20 +553,25 @@ void post_DB(String json){
   }
 
   if(WiFi.status() == WL_CONNECTED){
+    
     WiFiClient client;
 
     HTTPClient http;
 
-    if (http.begin(client, rest_host)) {  // HTTP
-      Serial.print("[HTTP] GET...");
+    if(debug) Serial.println("NodeMCU is connected to the internet\nStarting http request to rest_host");
 
+    
+    if (http.begin(client, rest_host)) {  // HTTP
+      if(debug) Serial.println("[HTTP] GET...");
+
+      http.addHeader("Content-Type", "application/json");
+      
       int httpCode = http.POST(json);
 
     
     if (httpCode > 0) {
         // HTTP header has been send and Server response header has been handled
-        if(debug)
-          Serial.printf("[HTTP] GET... code: %d", httpCode);
+        if(debug) Serial.printf("[HTTP] GET... code: %d", httpCode);
 
           // file found at server
   //        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
@@ -611,27 +603,56 @@ void Analytics_to_JSON(){
 
 //   char* temp_original_date;
 //   char* temp_taken_date;
+
+
+// allocate the memory for the document
+
+  DynamicJsonDocument Analyticsdoc(1024);
   
-  sprintf(temp_original_date, "%d-%d-%d %d:%d:00", analytics.year, analytics.month, analytics.day, analytics.hour, analytics.minute); //verify if errors
-    Analyticsdoc["original_date"] = temp_original_date;
+
+  JsonObject jobject = Analyticsdoc.to<JsonObject>();
+
+  if(debug) Serial.printf("original_date is %02d-%02d-%02d %02d:%02d:00\n", analytics.year, analytics.month, analytics.day, analytics.hour, analytics.minute);
   
-  sprintf(temp_taken_date, "%d-%d-%d %d:%d:00", analytics.year, analytics.month, analytics.day, analytics.TakenH, analytics.TakenM); //verify if errors
-  Analyticsdoc["taken_date"] = temp_taken_date;
+  sprintf(temp_original_date, "%02d-%02d-%02d %02d:%02d:00", analytics.year, analytics.month, analytics.day, analytics.hour, analytics.minute); //verify if errors
+    jobject["original_date"] = temp_original_date;
+
+  if(debug) Serial.printf("taken_date is %02d-%02d-%02d %02d:%02d:00\n", analytics.year, analytics.month, analytics.day, analytics.hour, analytics.minute);
   
-  Analyticsdoc["completed"] = analytics.taken;
+  sprintf(temp_taken_date, "%02d-%02d-%02d %02d:%02d:00", analytics.year, analytics.month, analytics.day, analytics.TakenH, analytics.TakenM); //verify if errors
+  jobject["taken_date"] = temp_taken_date;
+  
+  jobject["completed"] = analytics.taken;
+  
+  JsonArray pillNameArr = Analyticsdoc.createNestedArray("pill_names");
   
   for(int i = 0; i<pillContainersCount; i++){
-    for(int j = 0; j<maxPillName; j++){
-      Analyticsdoc["pill_names"][i][j] = analytics.pillNames[i][j];
-    }
+   // for(int j = 0; j<maxPillName; j++){
+      pillNameArr.add(analytics.pillNames[i]);
+   // }
   }
 
+  JsonArray pillQuantitiesArr = Analyticsdoc.createNestedArray("pill_quantities");
+  
   for(int i = 0; i<pillContainersCount; i++){
-      Analyticsdoc["pill_quantities"][i] = analytics.pillQuantities[i];
+      pillQuantitiesArr.add(analytics.pillQuantities[i]);
   }
+  serializeJson(Analyticsdoc, json);
 
-serializeJson(Analyticsdoc, json);
+//pillNameArr.clear();
+//pillQuantitiesArr.clear();
+
+//jobject.clear();
+//
+//Analyticsdoc.garbageCollect();
+//Analyticsdoc.clear();
+
+
+//Analyticsdoc.~BasicJsonDocument(); //destructor for JSONDocument
+
 post_DB(json);
+
+json = "";
 }
 
 void loop() {
